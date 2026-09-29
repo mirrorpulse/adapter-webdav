@@ -17,7 +17,7 @@ permissions:
 env:
   ADAPTER_ID: 'com.mirrorpulse.adapter.webdav'
   ADAPTER_LABEL: 'WebDAV'
-  WORKER_PROJECT: 'samples/MirrorPulse.Adapter.SampleWorker/MirrorPulse.Adapter.SampleWorker.csproj'
+  WORKER_PROJECT: 'src/MirrorPulse.Adapter.WebDav.Worker/MirrorPulse.Adapter.WebDav.Worker.csproj'
 
 jobs:
   release:
