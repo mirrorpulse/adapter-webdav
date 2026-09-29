@@ -263,12 +263,20 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
                 }
             }
             Uri destination = Resolve(path);
+            string? current = await ReadRevisionAsync(destination, cancellationToken);
+            if (!string.Equals(expected, current, StringComparison.Ordinal))
+                throw new WebDavRevisionConflictException();
             using var put = new HttpRequestMessage(HttpMethod.Put, destination)
             { Content = new StreamContent(File.OpenRead(staged)) };
+            if (expected is null)
+                put.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
+            else if (EntityTagHeaderValue.TryParse(expected, out EntityTagHeaderValue? etag))
+                put.Headers.IfMatch.Add(etag);
             using HttpResponseMessage putResponse = await client.SendAsync(put, cancellationToken);
+            if (putResponse.StatusCode == HttpStatusCode.PreconditionFailed)
+                throw new WebDavRevisionConflictException();
             putResponse.EnsureSuccessStatusCode();
             string? actual = await ReadRevisionAsync(destination, cancellationToken);
-            if (expected is not null && !string.Equals(expected, actual, StringComparison.Ordinal)) throw new WebDavRevisionConflictException();
             await channel.SendAsync("UploadComplete", command.RequestId, true, new { revision = actual ?? $"{length}" }, cancellationToken);
         }
         finally { File.Delete(staged); }
