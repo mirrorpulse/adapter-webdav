@@ -1,8 +1,10 @@
-using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Globalization;
+using System.Net;
+using System.Text;
+using System.Xml.Linq;
 using MirrorPulse.Adapter.Sdk;
 
 namespace MirrorPulse.Adapter.WebDav.Worker;
@@ -34,8 +36,9 @@ public static class WebDavWorkerProgram
                 throw new InvalidDataException("The Host did not accept the WebDAV Worker handshake.");
             Dictionary<string, string> config = ready.Payload.Deserialize<Dictionary<string, string>>(Options)
                 ?? throw new InvalidDataException("The WebDAV configuration is missing.");
-            Uri endpoint = new(config.GetValueOrDefault("endpoint")
-                ?? throw new InvalidDataException("The WebDAV endpoint is missing."));
+            string endpointText = config.GetValueOrDefault("endpoint")
+                ?? throw new InvalidDataException("The WebDAV endpoint is missing.");
+            Uri endpoint = new(endpointText.EndsWith('/') ? endpointText : endpointText + "/");
             using var client = new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All });
             string? credentialReference = config.GetValueOrDefault("credentialReference");
             if (!string.IsNullOrWhiteSpace(credentialReference))
@@ -106,6 +109,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
                 case "Stat": await StatAsync(command, cancellationToken); break;
                 case "ReadRange": await ReadRangeAsync(command, cancellationToken); break;
                 case "Upload": await UploadAsync(command, cancellationToken); break;
+                case "List": await ListAsync(command, cancellationToken); break;
                 default: throw new InvalidDataException("The WebDAV Worker received an unsupported command.");
             }
         }
@@ -131,6 +135,87 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         await channel.SendAsync("StatResult", command.RequestId, true,
             new { revision = Revision(response), length = response.Content.Headers.ContentLength }, cancellationToken);
     }
+
+    private async Task ListAsync(AdapterControlFrame command, CancellationToken cancellationToken)
+    {
+        string path = command.Payload.GetProperty("path").GetString() ?? string.Empty;
+        int pageSize = command.Payload.GetProperty("pageSize").GetInt32();
+        if (pageSize is < 1 or > 512) throw new InvalidDataException("Page size invalid.");
+        int offset = ParseCursor(command.Payload);
+        using var request = new HttpRequestMessage(new HttpMethod("PROPFIND"), ResolveDirectory(path));
+        request.Headers.Add("Depth", "1");
+        request.Content = new StringContent("""
+            <?xml version="1.0" encoding="utf-8" ?>
+            <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/>
+            <d:getetag/><d:getlastmodified/><d:creationdate/></d:prop></d:propfind>
+            """, Encoding.UTF8, "application/xml");
+        using HttpResponseMessage response = await client.SendAsync(request,
+            HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        XDocument document = XDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        XNamespace dav = "DAV:";
+        string requestedPrefix = path.Trim('/');
+        var all = new List<WebDavDirectoryEntry>();
+        foreach (XElement responseElement in document.Descendants(dav + "response"))
+        {
+            string? href = responseElement.Element(dav + "href")?.Value;
+            if (string.IsNullOrWhiteSpace(href)) continue;
+            Uri itemUri = Uri.TryCreate(href, UriKind.Absolute, out Uri? absolute)
+                ? absolute : new Uri(baseUri, href);
+            string relative = Uri.UnescapeDataString(baseUri.MakeRelativeUri(itemUri).ToString())
+                .Trim('/').Replace('\\', '/');
+            if (relative.Length == 0 || !IsImmediateChild(relative, requestedPrefix)) continue;
+            XElement? prop = responseElement.Descendants(dav + "prop").FirstOrDefault();
+            bool isDirectory = prop?.Element(dav + "resourcetype")?.Element(dav + "collection") is not null;
+            long? length = long.TryParse(prop?.Element(dav + "getcontentlength")?.Value,
+                NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsedLength) ? parsedLength : null;
+            DateTimeOffset? creation = ParseDate(prop?.Element(dav + "creationdate")?.Value);
+            DateTimeOffset? lastWrite = ParseDate(prop?.Element(dav + "getlastmodified")?.Value);
+            string? revision = prop?.Element(dav + "getetag")?.Value?.Trim('"');
+            revision ??= lastWrite?.UtcTicks.ToString(CultureInfo.InvariantCulture);
+            revision ??= length?.ToString(CultureInfo.InvariantCulture);
+            revision ??= "0";
+            all.Add(new(relative, revision, isDirectory ? "Directory" : "File", relative,
+                isDirectory ? null : length, creation, lastWrite, false));
+        }
+
+        WebDavDirectoryEntry[] ordered = all.OrderBy(item => item.RelativePath,
+                StringComparer.OrdinalIgnoreCase).ThenBy(item => item.RelativePath, StringComparer.Ordinal).ToArray();
+        if (offset > ordered.Length) throw new InvalidDataException("Cursor is past the directory.");
+        WebDavDirectoryEntry[] page = ordered.Skip(offset).Take(pageSize).ToArray();
+        int next = offset + page.Length;
+        bool complete = next >= ordered.Length;
+        await channel.SendAsync("DirectoryPage", command.RequestId, true, new
+        {
+            entries = page,
+            cursor = complete ? null : Convert.ToBase64String(Encoding.UTF8.GetBytes(
+                next.ToString(CultureInfo.InvariantCulture))),
+            isComplete = complete,
+        }, cancellationToken);
+    }
+
+    private static bool IsImmediateChild(string relative, string parent)
+    {
+        string prefix = parent.Length == 0 ? string.Empty : parent.TrimEnd('/') + "/";
+        if (!relative.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        return relative[prefix.Length..].IndexOf('/') < 0;
+    }
+
+    private static int ParseCursor(JsonElement payload)
+    {
+        if (!payload.TryGetProperty("cursor", out JsonElement cursor) ||
+            cursor.ValueKind is JsonValueKind.Null || string.IsNullOrEmpty(cursor.GetString())) return 0;
+        string text = Encoding.UTF8.GetString(Convert.FromBase64String(cursor.GetString()!));
+        return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int offset) && offset >= 0
+            ? offset : throw new InvalidDataException("Cursor invalid.");
+    }
+
+    private static DateTimeOffset? ParseDate(string? value) =>
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTimeOffset parsed)
+            ? parsed : null;
+
+    private Uri ResolveDirectory(string path) => string.IsNullOrEmpty(path) ? baseUri : Resolve(path);
 
     private async Task ReadRangeAsync(AdapterControlFrame command, CancellationToken cancellationToken)
     {
@@ -205,6 +290,16 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
 
     private static string? Revision(HttpResponseMessage response) =>
         response.Headers.ETag?.Tag ?? response.Content.Headers.ContentLength?.ToString(CultureInfo.InvariantCulture);
+
+    private sealed record WebDavDirectoryEntry(
+        string RemoteId,
+        string RemoteRevision,
+        string ItemKind,
+        string RelativePath,
+        long? Length,
+        DateTimeOffset? CreationTime,
+        DateTimeOffset? LastWriteTime,
+        bool IsDeleted);
 }
 
 internal sealed class WebDavRevisionConflictException : IOException;
