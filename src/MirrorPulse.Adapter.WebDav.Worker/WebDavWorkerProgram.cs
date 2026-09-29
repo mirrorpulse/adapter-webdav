@@ -171,7 +171,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
                 NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsedLength) ? parsedLength : null;
             DateTimeOffset? creation = ParseDate(prop?.Element(dav + "creationdate")?.Value);
             DateTimeOffset? lastWrite = ParseDate(prop?.Element(dav + "getlastmodified")?.Value);
-            string? revision = prop?.Element(dav + "getetag")?.Value?.Trim('"');
+            string? revision = prop?.Element(dav + "getetag")?.Value?.Trim();
             revision ??= lastWrite?.UtcTicks.ToString(CultureInfo.InvariantCulture);
             revision ??= length?.ToString(CultureInfo.InvariantCulture);
             revision ??= "0";
