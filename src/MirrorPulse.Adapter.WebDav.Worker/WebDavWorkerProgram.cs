@@ -109,6 +109,8 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
                 case "Stat": await StatAsync(command, cancellationToken); break;
                 case "ReadRange": await ReadRangeAsync(command, cancellationToken); break;
                 case "Upload": await UploadAsync(command, cancellationToken); break;
+                case "Delete": await DeleteAsync(command, cancellationToken); break;
+                case "Move": await MoveAsync(command, cancellationToken); break;
                 case "List": await ListAsync(command, cancellationToken); break;
                 default: throw new InvalidDataException("The WebDAV Worker received an unsupported command.");
             }
@@ -117,8 +119,18 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         {
             string code = exception is WebDavRevisionConflictException ? "RemoteConflict" :
                 exception is InvalidDataException or ArgumentException or JsonException ? "InvalidRequest" :
+                exception is NotSupportedException ? "CapabilityUnavailable" :
                 "RetryableTransferFailure";
-            await channel.SendAsync("OperationError", command.RequestId, true, new { code }, CancellationToken.None);
+            if (exception is WebDavRevisionConflictException conflict)
+            {
+                await channel.SendAsync("OperationError", command.RequestId, true,
+                    new { code, expectedRevision = conflict.ExpectedRevision, actualRevision = conflict.ActualRevision },
+                    CancellationToken.None);
+            }
+            else
+            {
+                await channel.SendAsync("OperationError", command.RequestId, true, new { code }, CancellationToken.None);
+            }
         }
     }
 
@@ -282,6 +294,81 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         finally { File.Delete(staged); }
     }
 
+    private async Task DeleteAsync(AdapterControlFrame command, CancellationToken cancellationToken)
+    {
+        string path = command.Payload.GetProperty("path").GetString() ?? throw new InvalidDataException("Path missing.");
+        string? expected = command.Payload.TryGetProperty("expectedRevision", out JsonElement expectedElement) &&
+            expectedElement.ValueKind is not JsonValueKind.Null ? expectedElement.GetString() : null;
+        bool isDirectory = command.Payload.GetProperty("isDirectory").GetBoolean();
+        if (isDirectory)
+            throw new NotSupportedException("The WebDAV Worker does not delete directories through the mutation protocol.");
+
+        Uri destination = Resolve(path);
+        string? current = await ReadRevisionAsync(destination, cancellationToken);
+        if (current is null)
+        {
+            await channel.SendAsync("MutationComplete", command.RequestId, true,
+                new { revision = (string?)null }, cancellationToken);
+            return;
+        }
+
+        if (!string.Equals(current, expected, StringComparison.Ordinal))
+            throw new WebDavRevisionConflictException(expected, current);
+
+        using var request = new HttpRequestMessage(HttpMethod.Delete, destination);
+        AddIfMatch(request, expected);
+        using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
+        if (response.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
+            throw new WebDavRevisionConflictException(expected, await ReadRevisionAsync(destination, cancellationToken));
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            await channel.SendAsync("MutationComplete", command.RequestId, true,
+                new { revision = (string?)null }, cancellationToken);
+            return;
+        }
+        response.EnsureSuccessStatusCode();
+        await channel.SendAsync("MutationComplete", command.RequestId, true,
+            new { revision = (string?)null }, cancellationToken);
+    }
+
+    private async Task MoveAsync(AdapterControlFrame command, CancellationToken cancellationToken)
+    {
+        string sourcePath = command.Payload.GetProperty("sourcePath").GetString()
+            ?? throw new InvalidDataException("Source path missing.");
+        string destinationPath = command.Payload.GetProperty("destinationPath").GetString()
+            ?? throw new InvalidDataException("Destination path missing.");
+        string? expected = command.Payload.TryGetProperty("expectedRevision", out JsonElement expectedElement) &&
+            expectedElement.ValueKind is not JsonValueKind.Null ? expectedElement.GetString() : null;
+        bool isDirectory = command.Payload.GetProperty("isDirectory").GetBoolean();
+        if (isDirectory)
+            throw new NotSupportedException("The WebDAV Worker does not move directories through the mutation protocol.");
+
+        Uri source = Resolve(sourcePath);
+        Uri destination = Resolve(destinationPath);
+        string? current = await ReadRevisionAsync(source, cancellationToken);
+        if (!string.Equals(current, expected, StringComparison.Ordinal))
+            throw new WebDavRevisionConflictException(expected, current);
+
+        using var request = new HttpRequestMessage(new HttpMethod("MOVE"), source);
+        request.Headers.TryAddWithoutValidation("Destination", destination.AbsoluteUri);
+        request.Headers.TryAddWithoutValidation("Overwrite", "T");
+        AddIfMatch(request, expected);
+        using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
+        if (response.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
+            throw new WebDavRevisionConflictException(expected, await ReadRevisionAsync(source, cancellationToken));
+        response.EnsureSuccessStatusCode();
+        string revision = await ReadRevisionAsync(destination, cancellationToken)
+            ?? throw new IOException("The moved WebDAV file is missing.");
+        await channel.SendAsync("MutationComplete", command.RequestId, true,
+            new { revision }, cancellationToken);
+    }
+
+    private static void AddIfMatch(HttpRequestMessage request, string? expected)
+    {
+        if (!string.IsNullOrEmpty(expected) && EntityTagHeaderValue.TryParse(expected, out EntityTagHeaderValue? etag))
+            request.Headers.IfMatch.Add(etag);
+    }
+
     private async Task<string?> ReadRevisionAsync(Uri uri, CancellationToken cancellationToken)
     {
         using HttpResponseMessage response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, uri), cancellationToken);
@@ -310,4 +397,16 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         bool IsDeleted);
 }
 
-internal sealed class WebDavRevisionConflictException : IOException;
+internal sealed class WebDavRevisionConflictException : IOException
+{
+    public WebDavRevisionConflictException(string? expectedRevision = null, string? actualRevision = null)
+        : base("The WebDAV source changed before a conditional operation could complete.")
+    {
+        ExpectedRevision = expectedRevision;
+        ActualRevision = actualRevision;
+    }
+
+    public string? ExpectedRevision { get; }
+
+    public string? ActualRevision { get; }
+}
