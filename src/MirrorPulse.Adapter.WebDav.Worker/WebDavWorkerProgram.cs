@@ -227,7 +227,8 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTimeOffset parsed)
             ? parsed : null;
 
-    private Uri ResolveDirectory(string path) => string.IsNullOrEmpty(path) ? baseUri : Resolve(path);
+    private Uri ResolveDirectory(string path) => string.IsNullOrEmpty(path)
+        ? baseUri : new Uri(Resolve(path).AbsoluteUri.TrimEnd('/') + "/");
 
     private async Task ReadRangeAsync(AdapterControlFrame command, CancellationToken cancellationToken)
     {
@@ -301,7 +302,32 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
             expectedElement.ValueKind is not JsonValueKind.Null ? expectedElement.GetString() : null;
         bool isDirectory = command.Payload.GetProperty("isDirectory").GetBoolean();
         if (isDirectory)
-            throw new NotSupportedException("The WebDAV Worker does not delete directories through the mutation protocol.");
+        {
+            Uri directory = ResolveDirectory(path);
+            string? currentDirectory = await ReadRevisionAsync(directory, cancellationToken);
+            if (currentDirectory is null)
+            {
+                await channel.SendAsync("MutationComplete", command.RequestId, true,
+                    new { revision = (string?)null }, cancellationToken);
+                return;
+            }
+
+            if (!string.Equals(currentDirectory, expected, StringComparison.Ordinal))
+                throw new WebDavRevisionConflictException(expected, currentDirectory);
+
+            using var directoryRequest = new HttpRequestMessage(HttpMethod.Delete, directory);
+            directoryRequest.Headers.TryAddWithoutValidation("Depth", "infinity");
+            AddIfMatch(directoryRequest, expected);
+            using HttpResponseMessage directoryResponse = await client.SendAsync(directoryRequest, cancellationToken);
+            if (directoryResponse.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
+                throw new WebDavRevisionConflictException(expected,
+                    await ReadRevisionAsync(directory, cancellationToken));
+            if (directoryResponse.StatusCode != HttpStatusCode.NotFound)
+                directoryResponse.EnsureSuccessStatusCode();
+            await channel.SendAsync("MutationComplete", command.RequestId, true,
+                new { revision = (string?)null }, cancellationToken);
+            return;
+        }
 
         Uri destination = Resolve(path);
         string? current = await ReadRevisionAsync(destination, cancellationToken);
@@ -341,7 +367,30 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
             expectedElement.ValueKind is not JsonValueKind.Null ? expectedElement.GetString() : null;
         bool isDirectory = command.Payload.GetProperty("isDirectory").GetBoolean();
         if (isDirectory)
-            throw new NotSupportedException("The WebDAV Worker does not move directories through the mutation protocol.");
+        {
+            Uri sourceDirectory = ResolveDirectory(sourcePath);
+            Uri destinationDirectory = ResolveDirectory(destinationPath);
+            string? currentDirectory = await ReadRevisionAsync(sourceDirectory, cancellationToken);
+            if (!string.Equals(currentDirectory, expected, StringComparison.Ordinal))
+                throw new WebDavRevisionConflictException(expected, currentDirectory);
+            if (await ReadRevisionAsync(destinationDirectory, cancellationToken) is not null)
+                throw new IOException("The WebDAV move destination already exists.");
+
+            using var directoryRequest = new HttpRequestMessage(new HttpMethod("MOVE"), sourceDirectory);
+            directoryRequest.Headers.TryAddWithoutValidation("Destination", destinationDirectory.AbsoluteUri);
+            directoryRequest.Headers.TryAddWithoutValidation("Overwrite", "F");
+            AddIfMatch(directoryRequest, expected);
+            using HttpResponseMessage directoryResponse = await client.SendAsync(directoryRequest, cancellationToken);
+            if (directoryResponse.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
+                throw new WebDavRevisionConflictException(expected,
+                    await ReadRevisionAsync(sourceDirectory, cancellationToken));
+            directoryResponse.EnsureSuccessStatusCode();
+            string revision = await ReadRevisionAsync(destinationDirectory, cancellationToken)
+                ?? throw new IOException("The moved WebDAV directory is missing.");
+            await channel.SendAsync("MutationComplete", command.RequestId, true,
+                new { revision }, cancellationToken);
+            return;
+        }
 
         Uri source = Resolve(sourcePath);
         Uri destination = Resolve(destinationPath);
