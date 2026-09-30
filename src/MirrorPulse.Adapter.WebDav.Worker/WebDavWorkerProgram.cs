@@ -385,10 +385,10 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
                 throw new WebDavRevisionConflictException(expected,
                     await ReadRevisionAsync(sourceDirectory, cancellationToken));
             directoryResponse.EnsureSuccessStatusCode();
-            string revision = await ReadRevisionAsync(destinationDirectory, cancellationToken)
+            string movedDirectoryRevision = await ReadRevisionAsync(destinationDirectory, cancellationToken)
                 ?? throw new IOException("The moved WebDAV directory is missing.");
             await channel.SendAsync("MutationComplete", command.RequestId, true,
-                new { revision }, cancellationToken);
+                new { revision = movedDirectoryRevision }, cancellationToken);
             return;
         }
 
