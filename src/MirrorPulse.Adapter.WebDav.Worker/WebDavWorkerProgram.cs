@@ -304,7 +304,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         if (isDirectory)
         {
             Uri directory = ResolveDirectory(path);
-            string? currentDirectory = await ReadRevisionAsync(directory, cancellationToken);
+            string? currentDirectory = await ReadDirectoryRevisionAsync(directory, cancellationToken);
             if (currentDirectory is null)
             {
                 await channel.SendAsync("MutationComplete", command.RequestId, true,
@@ -321,7 +321,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
             using HttpResponseMessage directoryResponse = await client.SendAsync(directoryRequest, cancellationToken);
             if (directoryResponse.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
                 throw new WebDavRevisionConflictException(expected,
-                    await ReadRevisionAsync(directory, cancellationToken));
+                    await ReadDirectoryRevisionAsync(directory, cancellationToken));
             if (directoryResponse.StatusCode != HttpStatusCode.NotFound)
                 directoryResponse.EnsureSuccessStatusCode();
             await channel.SendAsync("MutationComplete", command.RequestId, true,
@@ -370,10 +370,10 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         {
             Uri sourceDirectory = ResolveDirectory(sourcePath);
             Uri destinationDirectory = ResolveDirectory(destinationPath);
-            string? currentDirectory = await ReadRevisionAsync(sourceDirectory, cancellationToken);
+            string? currentDirectory = await ReadDirectoryRevisionAsync(sourceDirectory, cancellationToken);
             if (!string.Equals(currentDirectory, expected, StringComparison.Ordinal))
                 throw new WebDavRevisionConflictException(expected, currentDirectory);
-            if (await ReadRevisionAsync(destinationDirectory, cancellationToken) is not null)
+            if (await ReadDirectoryRevisionAsync(destinationDirectory, cancellationToken) is not null)
                 throw new IOException("The WebDAV move destination already exists.");
 
             using var directoryRequest = new HttpRequestMessage(new HttpMethod("MOVE"), sourceDirectory);
@@ -383,9 +383,9 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
             using HttpResponseMessage directoryResponse = await client.SendAsync(directoryRequest, cancellationToken);
             if (directoryResponse.StatusCode is HttpStatusCode.PreconditionFailed or HttpStatusCode.Conflict)
                 throw new WebDavRevisionConflictException(expected,
-                    await ReadRevisionAsync(sourceDirectory, cancellationToken));
+                    await ReadDirectoryRevisionAsync(sourceDirectory, cancellationToken));
             directoryResponse.EnsureSuccessStatusCode();
-            string movedDirectoryRevision = await ReadRevisionAsync(destinationDirectory, cancellationToken)
+            string movedDirectoryRevision = await ReadDirectoryRevisionAsync(destinationDirectory, cancellationToken)
                 ?? throw new IOException("The moved WebDAV directory is missing.");
             await channel.SendAsync("MutationComplete", command.RequestId, true,
                 new { revision = movedDirectoryRevision }, cancellationToken);
@@ -423,6 +423,32 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         using HttpResponseMessage response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, uri), cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode(); return Revision(response);
+    }
+
+    private async Task<string?> ReadDirectoryRevisionAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(new HttpMethod("PROPFIND"), uri);
+        request.Headers.Add("Depth", "0");
+        request.Content = new StringContent("""
+            <?xml version="1.0" encoding="utf-8" ?>
+            <d:propfind xmlns:d="DAV:"><d:prop><d:getetag/><d:getlastmodified/>
+            <d:getcontentlength/></d:prop></d:propfind>
+            """, Encoding.UTF8, "application/xml");
+        using HttpResponseMessage response = await client.SendAsync(request,
+            HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        XDocument document = XDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        XNamespace dav = "DAV:";
+        XElement? prop = document.Descendants(dav + "prop").FirstOrDefault();
+        if (prop is null) return "0";
+        string? revision = prop.Element(dav + "getetag")?.Value.Trim();
+        DateTimeOffset? lastWrite = ParseDate(prop.Element(dav + "getlastmodified")?.Value);
+        revision ??= lastWrite?.UtcTicks.ToString(CultureInfo.InvariantCulture);
+        revision ??= long.TryParse(prop.Element(dav + "getcontentlength")?.Value,
+            NumberStyles.Integer, CultureInfo.InvariantCulture, out long length)
+            ? length.ToString(CultureInfo.InvariantCulture) : null;
+        return revision ?? "0";
     }
 
     private Uri Resolve(string path)
