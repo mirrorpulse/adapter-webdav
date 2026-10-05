@@ -36,6 +36,12 @@ server conditions and locks provide concurrency protection; they are not a
 transaction spanning multiple independent Host operations. See
 [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918).
 
+Packages include native x64 and ARM64 apphosts, their private .NET runtime,
+dependencies, and runtime license notices. Both payloads are signed in one
+immutable inventory. The package has a 256 MiB size boundary. The conformance
+profile launches the actual extracted Worker with global runtime discovery
+disabled and verifies its loaded `coreclr.dll` path.
+
 Run `pwsh ./eng/verify.ps1` for locked restore, Release builds, complete formatting,
 HTTP/URI boundaries and actual Worker process tests with two independently
 authenticated disposable HTTP endpoints.
@@ -50,10 +56,11 @@ fixture and run in the repository CI.
 Range reads require HTTP 206, matching byte offsets and total length, identity
 encoding, and a bounded body of at most 1 MiB. The Worker obtains HEAD metadata,
 uses a strong ETag condition when available, and compares the GET revision before
-returning bytes. Servers that ignore Range are rejected. This v1 contract checks
+returning bytes. Servers that ignore Range are rejected. The current contract checks
 each read; it does not pin one revision across separate Host range requests.
 PROPFIND is limited to 4 MiB and 8,192 responses, with DTDs disabled. Oversized
-directories fail explicitly until the paged Worker contract is available.
+directories fail explicitly; Worker pagination does not bypass this server-response
+budget.
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE).
 
@@ -75,7 +82,8 @@ verifies publisher trust at installation.
 The repository owner must configure environment reviewers, trusted branch/tag
 rules and signing-secret scope. YAML environment names alone do not enforce those
 protections. Existing organization secrets remain compatible until that migration.
-The current framework-dependent v1 runtime is retained by this release change.
+Source packages now require protocol v2 and include private runtimes for both RIDs.
+Previously released v1 packages retain their original identities and payloads.
 
 The release workflow also verifies the newly signed candidate using MirrorPulse
 16c6742 and real Local/WebDAV/SMB/FTP/SFTP Host/Worker fixtures on a disposable
