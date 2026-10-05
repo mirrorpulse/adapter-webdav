@@ -8,11 +8,33 @@ root has its own endpoint, HTTP client and Host credential reference. Basic and
 Bearer authentication stay scoped to that root; disabled roots do not parse their
 endpoint, request credentials or send HTTP requests.
 
-Root-bound listing, stat, range reads, new-file uploads, stable session replay and
-upload cancellation are implemented. Streams use bounded SDK frames and temporary
-transfer leases, removed before cancellation acknowledgment. Existing-file
-replacement and other mutations are being migrated in a separate change; this
-checkpoint refuses them explicitly. Previously published v1 assets are unchanged.
+Root-bound listing, stat, range reads, conditional uploads, move, delete, directory
+creation, stable session replay and upload cancellation are implemented. Streams
+use bounded SDK frames and temporary transfer leases, removed before cancellation
+acknowledgment. Previously published v1 assets are unchanged.
+
+Mutations require strong ETags. PUT uses `If-Match` or `If-None-Match: *`; MOVE
+also uses `Overwrite: F` and only crosses roots on the same origin with identical
+authorization. A competing destination is preserved. An accepted revision must
+match the native response ETag; when a file mutation omits that tag, a conditional
+GET verifies its exact length and SHA256 using a bounded streaming buffer. A
+later writer's unverified HEAD revision is never reported as upload acceptance.
+
+Directory MOVE and DELETE require an exclusive infinite-depth WebDAV write lock,
+a complete empty-directory listing, and the lock token plus ETag in the mutation
+condition. Nonempty trees, unusable locks and failed `propstat` responses are
+refused. Locks are released after the operation and also after validation fails.
+MKCOL must provide a strong accepted response ETag: a server that omits it leaves
+an ambiguous result for Host reconciliation rather than an invented revision.
+These requirements intentionally expose unsupported server capabilities.
+
+Partial HTTP 207 mutation responses, lost acknowledgments and failed acceptance
+proofs report `MutationOutcomeAmbiguous`. The Worker retains at most 256 bound
+receipts in its current session; identical ambiguous operations are not retried.
+The Host owns durable intent and reconciliation across Worker restarts. WebDAV
+server conditions and locks provide concurrency protection; they are not a
+transaction spanning multiple independent Host operations. See
+[RFC 4918](https://www.rfc-editor.org/rfc/rfc4918).
 
 Run `pwsh ./eng/verify.ps1` for locked restore, Release builds, complete formatting,
 HTTP/URI boundaries and actual Worker process tests with two independently

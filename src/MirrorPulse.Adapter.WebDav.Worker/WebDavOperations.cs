@@ -9,9 +9,9 @@ namespace MirrorPulse.Adapter.WebDav.Worker;
 
 internal static class WebDavOperations
 {
-    public static async Task<string?> RevisionAsync(WebDavWorkerRoot root, string path, CancellationToken token)
+    public static async Task<string?> RevisionAsync(WebDavWorkerRoot root, string path, CancellationToken token, bool directory = false)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Head, WebDavUriPolicy.Resolve(root.Endpoint, path));
+        using var request = new HttpRequestMessage(HttpMethod.Head, WebDavUriPolicy.Resolve(root.Endpoint, path, directory));
         using HttpResponseMessage response = await root.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         RequireSuccessful(response);
@@ -44,9 +44,10 @@ internal static class WebDavOperations
         {
             string href = item.Element(dav + "href")?.Value ?? throw new InvalidDataException("InvalidDirectoryResponse");
             string relative = WebDavUriPolicy.RelativeHref(root.Endpoint, href);
-            if (!relative.StartsWith(prefix, StringComparison.Ordinal) || relative.Length == prefix.Length || relative[prefix.Length..].Contains('/')) continue;
             XElement[] successful = item.Elements(dav + "propstat").Where(stat => IsSuccessfulStatus(stat.Element(dav + "status")?.Value)).ToArray();
-            if (successful.Length == 0) continue;
+            if (successful.Length == 0 || item.Elements(dav + "propstat").Any(stat => !IsSuccessfulStatus(stat.Element(dav + "status")?.Value)))
+                throw new InvalidDataException("DirectoryEnumerationIncomplete");
+            if (!relative.StartsWith(prefix, StringComparison.Ordinal) || relative.Length == prefix.Length || relative[prefix.Length..].Contains('/')) continue;
             var properties = successful.SelectMany(stat => stat.Elements(dav + "prop").Elements()).ToDictionary(element => element.Name, element => element.Value);
             bool directory = successful.SelectMany(stat => stat.Elements(dav + "prop")).Any(prop => prop.Element(dav + "resourcetype")?.Element(dav + "collection") is not null);
             long? length = long.TryParse(properties.GetValueOrDefault(dav + "getcontentlength"), NumberStyles.None, CultureInfo.InvariantCulture, out long parsed) && parsed >= 0 ? parsed : null;
@@ -69,26 +70,35 @@ internal static class WebDavOperations
         };
     }
 
-    public static async Task<string> UploadNewAsync(WebDavWorkerRoot root, AdapterOperationRequest operation, Stream content, CancellationToken token)
+    public static async Task<string> UploadAsync(WebDavWorkerRoot root, AdapterOperationRequest operation, Stream content, string digest, CancellationToken token)
     {
         var condition = operation.Preconditions ?? new();
-        if (condition.ExpectedRevision is not null || !condition.DestinationMustBeAbsent) throw new InvalidDataException("CapabilityUnavailable");
-        if (await RevisionAsync(root, operation.Path, token).ConfigureAwait(false) is not null) throw new InvalidDataException("RemoteConflict");
+        if (condition.ExpectedRevision is not null) RequireStrongTag(condition.ExpectedRevision);
+        string? before = await RevisionAsync(root, operation.Path, token).ConfigureAwait(false);
+        if (before != condition.ExpectedRevision || (condition.DestinationMustBeAbsent && before is not null))
+            throw new InvalidDataException("RemoteConflict");
+        long length = content.Length;
         content.Position = 0;
         using var request = new HttpRequestMessage(HttpMethod.Put, WebDavUriPolicy.Resolve(root.Endpoint, operation.Path)) { Content = new StreamContent(content) };
-        request.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
+        if (condition.ExpectedRevision is null) request.Headers.IfNoneMatch.Add(EntityTagHeaderValue.Any);
+        else request.Headers.IfMatch.Add(RequireStrongTag(condition.ExpectedRevision));
         try
         {
             using HttpResponseMessage response = await root.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             if (response.StatusCode == HttpStatusCode.PreconditionFailed) throw new InvalidDataException("RemoteConflict");
-            RequireSuccessful(response);
-            string? revision = await RevisionAsync(root, operation.Path, token).ConfigureAwait(false);
-            if (!EntityTagHeaderValue.TryParse(revision, out EntityTagHeaderValue? tag) || tag.IsWeak) throw new InvalidDataException("MutationOutcomeAmbiguous");
-            return revision!;
+            if (response.StatusCode == HttpStatusCode.Unauthorized) throw new InvalidDataException("CredentialRejected");
+            if (response.StatusCode == HttpStatusCode.Forbidden) throw new InvalidDataException("AccessDenied");
+            if (response.StatusCode is not (HttpStatusCode.Created or HttpStatusCode.NoContent or HttpStatusCode.OK))
+                throw new InvalidDataException("MutationOutcomeAmbiguous");
+            return await WebDavAcceptance.ConfirmAsync(root, operation.Path, response.Headers.ETag?.ToString(),
+                new(length, digest), directory: false, token).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or OperationCanceledException)
         { throw new InvalidDataException("MutationOutcomeAmbiguous", exception); }
     }
+
+    public static EntityTagHeaderValue RequireStrongTag(string? revision) => EntityTagHeaderValue.TryParse(revision, out EntityTagHeaderValue? value) &&
+        !value.IsWeak && value != EntityTagHeaderValue.Any ? value : throw new InvalidDataException("CapabilityUnavailable");
 
     private static bool IsSuccessfulStatus(string? value) => value?.Split(' ', StringSplitOptions.RemoveEmptyEntries) is { Length: >= 2 } parts && parts[1] == "200";
     private static DateTimeOffset? Date(string? value) => DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,

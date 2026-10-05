@@ -54,7 +54,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
                     case "Upload": await BeginUploadAsync(command, address, paths, cancellationToken).ConfigureAwait(false); break;
                     case "Move":
                     case "Delete":
-                    case "CreateDirectory": throw new InvalidDataException("CapabilityUnavailable");
+                    case "CreateDirectory": await MutateAsync(command, address, paths, cancellationToken).ConfigureAwait(false); break;
                     default: throw new InvalidDataException("CapabilityUnavailable");
                 }
             }
@@ -96,10 +96,11 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
         if (length < 0 || stream == Guid.Empty || _uploads.Count >= 4) throw new InvalidDataException("UploadLimit");
         if (_uploads.Values.Any(pending => pending.Operation.OperationId == operation.OperationId)) throw new InvalidDataException("OperationInProgress");
         _ = WebDavUriPolicy.Resolve(paths.Endpoint, address.Path);
-        if (operation.Preconditions?.ExpectedRevision is not null || operation.Preconditions?.DestinationMustBeAbsent == false) throw new InvalidDataException("CapabilityUnavailable");
+        if (operation.Preconditions?.ExpectedRevision is { } expected) WebDavOperations.RequireStrongTag(expected);
         string fingerprint = Fingerprint(command.MessageType, operation, length);
         bool replay = _accepted.TryGetValue(operation.OperationId, out AcceptedUpload? accepted);
         if (replay && accepted!.Fingerprint != fingerprint) throw new InvalidDataException("OperationBindingMismatch");
+        if (replay && accepted!.Ambiguous) throw new InvalidDataException("MutationOutcomeAmbiguous");
         if (!replay)
         {
             string? current = await WebDavOperations.RevisionAsync(paths, address.Path, token).ConfigureAwait(false);
@@ -137,7 +138,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
             }
             else
             {
-                revision = await WebDavOperations.UploadNewAsync(upload.Paths, upload.Operation, upload.Lease.Stream, token).ConfigureAwait(false);
+                revision = await WebDavOperations.UploadAsync(upload.Paths, upload.Operation, upload.Lease.Stream, digest, token).ConfigureAwait(false);
                 _accepted.Add(upload.Operation.OperationId, new(upload.Fingerprint, digest, revision));
                 _acceptedOrder.Enqueue(upload.Operation.OperationId);
                 if (_acceptedOrder.Count > 256) _accepted.Remove(_acceptedOrder.Dequeue());
@@ -154,6 +155,8 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
         catch (Exception exception) when (IsOperationFailure(exception))
         {
             _uploads.Remove(chunk.RequestId);
+            if (exception is InvalidDataException { Message: "MutationOutcomeAmbiguous" })
+                RememberAmbiguous(upload.Operation.OperationId, upload.Fingerprint);
             await upload.Lease.DisposeAsync().ConfigureAwait(false);
             await ErrorAsync(upload.Command, exception, token).ConfigureAwait(false);
         }
@@ -181,8 +184,50 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
     private static AdapterOperationRequest DecodeOperation(AdapterControlFrame command) =>
         AdapterProtocolJson.Decode<AdapterOperationRequest>(Encoding.UTF8.GetBytes(command.Payload.GetRawText()));
 
+    private async Task MutateAsync(AdapterControlFrame command, AdapterFileAddress address, WebDavWorkerRoot paths, CancellationToken token)
+    {
+        AdapterOperationRequest operation;
+        if (command.MessageType == "CreateDirectory")
+        {
+            AdapterCreateDirectoryRequest create = AdapterProtocolJson.Decode<AdapterCreateDirectoryRequest>(Encoding.UTF8.GetBytes(command.Payload.GetRawText()));
+            operation = new(create.OperationId, create.RootKey, create.Path, Preconditions: new(null, create.MustBeAbsent), IsDirectory: true);
+        }
+        else operation = DecodeOperation(command);
+        AdapterProtocolJson.ValidateMutation(operation, requiresDestination: command.MessageType == "Move");
+        if (address.Path.Length == 0 || operation.DestinationPath?.Length == 0) throw new InvalidDataException("RootMutationForbidden");
+        WebDavWorkerRoot? destination = command.MessageType == "Move" ? roots.Get(operation.DestinationRootKey!) : null;
+        string fingerprint = Fingerprint(command.MessageType, operation, null);
+        string? revision;
+        if (_accepted.TryGetValue(operation.OperationId, out AcceptedUpload? accepted))
+        {
+            if (accepted.Fingerprint != fingerprint) throw new InvalidDataException("OperationBindingMismatch");
+            if (accepted.Ambiguous) throw new InvalidDataException("MutationOutcomeAmbiguous");
+            revision = accepted.Revision;
+        }
+        else
+        {
+            try { revision = await WebDavMutations.ExecuteAsync(command.MessageType, paths, operation, destination, token).ConfigureAwait(false); }
+            catch (InvalidDataException exception) when (exception.Message == "MutationOutcomeAmbiguous")
+            {
+                RememberAmbiguous(operation.OperationId, fingerprint);
+                throw;
+            }
+            _accepted.Add(operation.OperationId, new(fingerprint, null, revision));
+            _acceptedOrder.Enqueue(operation.OperationId);
+            if (_acceptedOrder.Count > 256) _accepted.Remove(_acceptedOrder.Dequeue());
+        }
+        await ReplyAsync(command, "MutationComplete", new { rootKey = operation.RootKey, operationId = operation.OperationId, revision }, token).ConfigureAwait(false);
+    }
+
     private static string Fingerprint(string type, AdapterOperationRequest operation, long? length) =>
         Convert.ToHexString(SHA256.HashData(AdapterProtocolJson.Encode(new { type, operation, length })));
+
+    private void RememberAmbiguous(Guid operationId, string fingerprint)
+    {
+        _accepted.Add(operationId, new(fingerprint, null, null, true));
+        _acceptedOrder.Enqueue(operationId);
+        if (_acceptedOrder.Count > 256) _accepted.Remove(_acceptedOrder.Dequeue());
+    }
 
     private ValueTask ReplyAsync(AdapterControlFrame command, string type, object payload, CancellationToken token) =>
         channel.SendAsync(type, command.RequestId, true, payload, token);
@@ -193,7 +238,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
     {
         string[] codes = ["UnknownRoot", "RootOffline", "InvalidCursor", "InvalidPageSize", "InvalidRange", "RemoteConflict",
             "OperationBindingMismatch", "OperationInProgress", "CapabilityUnavailable", "Canceled", "CancelRootMismatch",
-            "CancelOperationMismatch", "UploadLimit", "MutationOutcomeAmbiguous", "CredentialRejected", "AccessDenied"];
+            "CancelOperationMismatch", "UploadLimit", "MutationOutcomeAmbiguous", "CredentialRejected", "AccessDenied", "DestinationExists", "CrossEndpointMoveUnavailable", "RootMutationForbidden", "DirectoryNotEmpty", "DirectoryEnumerationIncomplete"];
         string code = exception is InvalidDataException && codes.Contains(exception.Message, StringComparer.Ordinal)
             ? exception.Message : exception is HttpRequestException or IOException or OperationCanceledException ? "RetryableTransferFailure" : "InvalidRequest";
         string? rootKey = command.Payload.TryGetProperty("rootKey", out JsonElement root) && root.ValueKind == JsonValueKind.String ? root.GetString() : null;
@@ -205,7 +250,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
         _uploads.Clear();
     }
 
-    private sealed record AcceptedUpload(string Fingerprint, string? Digest, string? Revision);
+    private sealed record AcceptedUpload(string Fingerprint, string? Digest, string? Revision, bool Ambiguous = false);
     private sealed record PendingUpload(AdapterControlFrame Command, AdapterOperationRequest Operation, WebDavWorkerRoot Paths,
         string Fingerprint, bool Replay, AdapterStreamBinding Binding, AdapterTransferLease Lease);
 }
