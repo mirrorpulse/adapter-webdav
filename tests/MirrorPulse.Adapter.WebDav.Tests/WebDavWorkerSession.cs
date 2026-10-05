@@ -94,6 +94,9 @@ internal sealed class WebDavWorkerSession : IAsyncDisposable
         AdapterControlFrame result = await ReadAsync();
         Assert.AreEqual(request, result.RequestId);
         Assert.IsTrue(result.IsResponse);
+        JsonElement expected = AdapterProtocolJson.ToElement(payload);
+        if (expected.TryGetProperty("operationId", out JsonElement operation))
+            Assert.AreEqual(operation.GetGuid(), result.Payload.GetProperty("operationId").GetGuid());
         return result;
     }
 
@@ -129,16 +132,18 @@ internal sealed class WebDavWorkerSession : IAsyncDisposable
     {
         Guid request = Guid.NewGuid();
         Guid stream = Guid.NewGuid();
+        Guid stableOperation = operation ?? Guid.NewGuid();
         await SendAsync("Upload", request, new
         {
             rootKey = root,
             path,
-            operationId = operation ?? Guid.NewGuid(),
+            operationId = stableOperation,
             streamId = stream,
             length = content.Length,
             preconditions = preconditions ?? new AdapterMutationPreconditions()
         });
         AdapterControlFrame ready = await ReadAsync();
+        Assert.AreEqual(stableOperation, ready.Payload.GetProperty("operationId").GetGuid());
         if (ready.MessageType == "OperationError") return ready;
         Assert.AreEqual("UploadReady", ready.MessageType);
         int offset = 0;
@@ -150,6 +155,7 @@ internal sealed class WebDavWorkerSession : IAsyncDisposable
         } while (offset < content.Length);
         AdapterControlFrame complete = await ReadAsync();
         Assert.AreEqual(request, complete.RequestId);
+        Assert.AreEqual(stableOperation, complete.Payload.GetProperty("operationId").GetGuid());
         return complete;
     }
 

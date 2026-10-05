@@ -240,7 +240,9 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
         string code = exception is WebDavRevisionConflictException ? "RemoteConflict" : exception is InvalidDataException && codes.Contains(exception.Message, StringComparer.Ordinal)
             ? exception.Message : exception is HttpRequestException or IOException or OperationCanceledException ? "RetryableTransferFailure" : "InvalidRequest";
         string? rootKey = command.Payload.TryGetProperty("rootKey", out JsonElement root) && root.ValueKind == JsonValueKind.String ? root.GetString() : null;
-        return ReplyAsync(command, "OperationError", new { rootKey, code }, token);
+        Guid? operationId = command.Payload.TryGetProperty("operationId", out JsonElement operation) &&
+            operation.ValueKind == JsonValueKind.String && operation.TryGetGuid(out Guid id) ? id : null;
+        return ReplyAsync(command, "OperationError", new { rootKey, operationId, code }, token);
     }
     public async ValueTask DisposeAsync()
     {
