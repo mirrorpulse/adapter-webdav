@@ -50,14 +50,17 @@ Requests use raw relative path segments, encoded exactly once by the Worker.
 Absolute URIs, traversal, encoded aliases and returned hrefs outside the configured
 origin/directory are rejected. HTTP redirects are not followed, so authentication
 is never forwarded to another origin. Unicode names, spaces and literal URI
-characters are encoded per segment. Boundary tests include an actual HTTP redirect
+characters are encoded per segment. HEAD accepts only the exact canonical trailing
+slash for the same authorized directory; arbitrary redirects remain refused.
+Boundary tests include an actual HTTP redirect
 fixture and run in the repository CI.
 
 Range reads require HTTP 206, matching byte offsets and total length, identity
 encoding, and a bounded body of at most 1 MiB. The Worker obtains HEAD metadata,
 uses a strong ETag condition when available, and compares the GET revision before
 returning bytes. Servers that ignore Range are rejected. The current contract checks
-each read; it does not pin one revision across separate Host range requests.
+each read and honors the Host's expected revision through its HEAD and conditional
+GET; it does not hold a remote lock across separate Host range requests.
 PROPFIND is limited to 4 MiB and 8,192 responses, with DTDs disabled. Oversized
 directories fail explicitly; Worker pagination does not bypass this server-response
 budget.

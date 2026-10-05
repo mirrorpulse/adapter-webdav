@@ -17,6 +17,6 @@ foreach (Type type in new[] { typeof(WebDavWorkerProcessTests), typeof(WebDavWor
         Console.WriteLine("Passed: " + method.Name);
     }
 }
-if (count != 11) throw new InvalidDataException("The complete WebDAV conformance profile must execute without skips.");
+if (count != 13) throw new InvalidDataException("The complete WebDAV conformance profile must execute without skips.");
 Console.WriteLine("WebDAV conformance passed with the Worker private runtime: " + count);
 return 0;

@@ -14,3 +14,8 @@ foreach ($project in $projects) {
 }
 & dotnet test $projects[1] --configuration Release --no-build --no-restore --logger trx --results-directory artifacts/test-results
 if ($LASTEXITCODE -ne 0) { throw 'WebDAV boundary tests failed.' }
+[xml]$trx = Get-Content -LiteralPath (@(Get-ChildItem -LiteralPath artifacts/test-results -Filter '*.trx' | Sort-Object LastWriteTimeUtc -Descending)[0].FullName) -Raw
+$counts = $trx.TestRun.ResultSummary.Counters
+if ($counts.total -ne 46 -or $counts.executed -ne 46 -or $counts.passed -ne 46 -or $counts.notExecuted -ne 0) {
+    throw 'All WebDAV URI/HTTP and real Worker process cases must execute without skips.'
+}

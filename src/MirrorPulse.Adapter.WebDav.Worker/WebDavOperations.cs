@@ -11,13 +11,20 @@ internal static class WebDavOperations
 {
     public static async Task<string?> RevisionAsync(WebDavWorkerRoot root, string path, CancellationToken token, bool directory = false)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Head, WebDavUriPolicy.Resolve(root.Endpoint, path, directory));
+        Uri uri = WebDavUriPolicy.Resolve(root.Endpoint, path, directory || path.Length == 0);
+        using var request = new HttpRequestMessage(HttpMethod.Head, uri);
         using HttpResponseMessage response = await root.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        if (!directory && path.Length > 0 && response.StatusCode is HttpStatusCode.MovedPermanently or HttpStatusCode.PermanentRedirect &&
+            response.Headers.Location is { } location && new Uri(uri, location) == WebDavUriPolicy.Resolve(root.Endpoint, path, directory: true))
+            return await RevisionAsync(root, path, token, directory: true).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         RequireSuccessful(response);
-        return response.Headers.ETag?.ToString() ?? "metadata:" + response.Content.Headers.ContentLength?.ToString(CultureInfo.InvariantCulture) +
-            ":" + response.Content.Headers.LastModified?.UtcTicks.ToString(CultureInfo.InvariantCulture);
+        return ResponseRevision(response);
     }
+
+    internal static string ResponseRevision(HttpResponseMessage response) => response.Headers.ETag?.ToString() ??
+        "metadata:" + response.Content.Headers.ContentLength?.ToString(CultureInfo.InvariantCulture) +
+        ":" + response.Content.Headers.LastModified?.UtcTicks.ToString(CultureInfo.InvariantCulture);
 
     public static async Task<object> ListAsync(WebDavWorkerRoot root, AdapterFileAddress address, int size, string? cursor, CancellationToken token)
     {

@@ -27,6 +27,8 @@ internal sealed class WebDavHttpFixture : IAsyncDisposable
     public bool OversizedProof { get; set; }
     public Action? BeforeMutation { get; set; }
     public Action? AfterMutation { get; set; }
+    public Action? BeforeGet { get; set; }
+    public Uri? DirectoryRedirect { get; set; }
     public int MutationRequests { get; private set; }
     public int Requests { get; private set; }
     public int Puts { get; private set; }
@@ -73,6 +75,7 @@ internal sealed class WebDavHttpFixture : IAsyncDisposable
         HttpListenerResponse response = context.Response;
         if (request.Headers["Authorization"] != _authorization) { response.StatusCode = 401; return; }
         string path = Uri.UnescapeDataString(request.Url!.AbsolutePath[Endpoint.AbsolutePath.Length..]).TrimEnd('/');
+        if (request.HttpMethod == "GET") { BeforeGet?.Invoke(); BeforeGet = null; }
         if (request.HttpMethod == "PROPFIND")
         {
             string prefix = path.Length == 0 ? "" : path + "/";
@@ -126,6 +129,8 @@ internal sealed class WebDavHttpFixture : IAsyncDisposable
             return;
         }
         bool isDirectory = Directories.ContainsKey(path);
+        if (isDirectory && request.HttpMethod == "HEAD" && !request.Url.AbsolutePath.EndsWith('/'))
+        { response.StatusCode = 301; response.RedirectLocation = DirectoryRedirect?.AbsoluteUri ?? request.Url.AbsoluteUri + "/"; return; }
         if (!Files.TryGetValue(path, out byte[]? content) && !isDirectory) { response.StatusCode = 404; return; }
         string revision = isDirectory ? "\"directory\"" : Revision(content!);
         if (WeakTags) revision = "W/" + revision;

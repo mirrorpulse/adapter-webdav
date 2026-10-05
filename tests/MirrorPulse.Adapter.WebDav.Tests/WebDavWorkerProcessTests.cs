@@ -75,4 +75,34 @@ public sealed class WebDavWorkerProcessTests
         Assert.AreEqual("UploadComplete", (await session.UploadAsync("right", "after.bin", [2])).MessageType);
         Assert.IsFalse(session.Left.Files.ContainsKey("after.bin"));
     }
+
+    [TestMethod]
+    public async Task RangeKeepsTheHostsExpectedRevisionAndRejectsAConcurrentWriter()
+    {
+        await using var session = await WebDavWorkerSession.StartAsync();
+        string accepted = WebDavHttpFixture.Revision(session.Left.Files["same.txt"]);
+        session.Left.BeforeGet = () => session.Left.Files["same.txt"] = Encoding.UTF8.GetBytes("race");
+        var changed = await session.RequestAsync("ReadRange", new { rootKey = "left", path = "same.txt", offset = 0, length = 4, expectedRevision = accepted });
+        Assert.AreEqual("OperationError", changed.MessageType);
+        Assert.AreEqual("RemoteConflict", changed.Payload.GetProperty("code").GetString());
+        var stale = await session.RequestAsync("ReadRange", new { rootKey = "left", path = "same.txt", offset = 0, length = 4, expectedRevision = accepted });
+        Assert.AreEqual("RemoteConflict", stale.Payload.GetProperty("code").GetString());
+        CollectionAssert.AreEqual(Encoding.UTF8.GetBytes("race"), await session.ReadRangeAsync("left", "same.txt", 4));
+    }
+
+    [TestMethod]
+    public async Task DirectoryStatAcceptsOnlyItsExactCanonicalSlashLocation()
+    {
+        await using var session = await WebDavWorkerSession.StartAsync();
+        session.Left.Directories["collection"] = true;
+        var result = await session.RequestAsync("Stat", new { rootKey = "left", path = "collection" });
+        Assert.AreEqual("StatResult", result.MessageType);
+        Assert.AreEqual("\"directory\"", result.Payload.GetProperty("revision").GetString());
+        Assert.AreEqual(2, session.Left.Requests);
+        Assert.AreEqual(0, session.Right.Requests);
+        session.Left.DirectoryRedirect = new(session.Right.Endpoint, "collection/");
+        Assert.AreEqual("OperationError", (await session.RequestAsync("Stat", new { rootKey = "left", path = "collection" })).MessageType);
+        Assert.AreEqual(3, session.Left.Requests);
+        Assert.AreEqual(0, session.Right.Requests, "Authorization must not be forwarded to a returned different origin.");
+    }
 }

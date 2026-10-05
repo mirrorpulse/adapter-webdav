@@ -77,9 +77,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
         long length = command.Payload.GetProperty("length").GetInt64();
         if (offset < 0 || length is < 1 or > AdapterBinaryChunkV2Codec.MaximumChunkBytes) throw new InvalidDataException("InvalidRange");
         string? expected = command.Payload.TryGetProperty("expectedRevision", out JsonElement revision) && revision.ValueKind == JsonValueKind.String ? revision.GetString() : null;
-        if (expected is not null && await WebDavOperations.RevisionAsync(paths, address.Path, token).ConfigureAwait(false) != expected)
-            throw new InvalidDataException("RemoteConflict");
-        byte[] bytes = await WebDavResponseReader.ReadRangeAsync(paths.Client, WebDavUriPolicy.Resolve(paths.Endpoint, address.Path), offset, checked((int)length), token).ConfigureAwait(false);
+        byte[] bytes = await WebDavResponseReader.ReadRangeAsync(paths.Client, WebDavUriPolicy.Resolve(paths.Endpoint, address.Path), offset, checked((int)length), token, expected).ConfigureAwait(false);
         if (bytes.Length != length) throw new InvalidDataException("InvalidRange");
         Guid stream = Guid.NewGuid();
         await ReplyAsync(command, "ReadRangeReady", new { rootKey = address.RootKey, streamId = stream, length }, token).ConfigureAwait(false);
@@ -239,7 +237,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Adap
         string[] codes = ["UnknownRoot", "RootOffline", "InvalidCursor", "InvalidPageSize", "InvalidRange", "RemoteConflict",
             "OperationBindingMismatch", "OperationInProgress", "CapabilityUnavailable", "Canceled", "CancelRootMismatch",
             "CancelOperationMismatch", "UploadLimit", "MutationOutcomeAmbiguous", "CredentialRejected", "AccessDenied", "DestinationExists", "CrossEndpointMoveUnavailable", "RootMutationForbidden", "DirectoryNotEmpty", "DirectoryEnumerationIncomplete"];
-        string code = exception is InvalidDataException && codes.Contains(exception.Message, StringComparer.Ordinal)
+        string code = exception is WebDavRevisionConflictException ? "RemoteConflict" : exception is InvalidDataException && codes.Contains(exception.Message, StringComparer.Ordinal)
             ? exception.Message : exception is HttpRequestException or IOException or OperationCanceledException ? "RetryableTransferFailure" : "InvalidRequest";
         string? rootKey = command.Payload.TryGetProperty("rootKey", out JsonElement root) && root.ValueKind == JsonValueKind.String ? root.GetString() : null;
         return ReplyAsync(command, "OperationError", new { rootKey, code }, token);
