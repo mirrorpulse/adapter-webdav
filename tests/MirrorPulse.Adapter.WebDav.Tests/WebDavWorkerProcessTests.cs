@@ -1,3 +1,9 @@
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using MirrorPulse.Adapter.Sdk;
 
@@ -104,5 +110,41 @@ public sealed class WebDavWorkerProcessTests
         Assert.AreEqual("OperationError", (await session.RequestAsync("Stat", new { rootKey = "left", path = "collection" })).MessageType);
         Assert.AreEqual(3, session.Left.Requests);
         Assert.AreEqual(0, session.Right.Requests, "Authorization must not be forwarded to a returned different origin.");
+    }
+
+    [TestMethod]
+    public async Task ActualWorkerRejectsUntrustedTlsBeforeSendingAuthorization()
+    {
+        using RSA key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=localhost", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var names = new SubjectAlternativeNameBuilder();
+        names.AddDnsName("localhost");
+        request.CertificateExtensions.Add(names.Build());
+        using X509Certificate2 certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(5));
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        await using var session = await WebDavWorkerSession.StartAsync(new Uri($"https://localhost:{port}/dav/"));
+        Task<AdapterControlFrame> operation = session.RequestAsync("Stat", new { rootKey = "left", path = "same.txt" });
+        using TcpClient client = await listener.AcceptTcpClientAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await using var stream = new SslStream(client.GetStream());
+        bool applicationBytes = false;
+        try
+        {
+            await stream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+            { ServerCertificate = certificate, EnabledSslProtocols = SslProtocols.Tls12 }).WaitAsync(TimeSpan.FromSeconds(5));
+            byte[] bytes = new byte[1];
+            applicationBytes = await stream.ReadAsync(bytes).AsTask().WaitAsync(TimeSpan.FromSeconds(5)) > 0;
+        }
+        catch (AuthenticationException) { }
+        catch (IOException) { }
+        await stream.DisposeAsync();
+        client.Close();
+        listener.Stop();
+        AdapterControlFrame failure = await operation.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.AreEqual("OperationError", failure.MessageType);
+        Assert.IsFalse(applicationBytes, "An untrusted server must not receive the HTTP Authorization header.");
+        Assert.AreEqual(0, session.Left.Requests);
+        Assert.AreEqual(0, session.Right.Requests);
     }
 }

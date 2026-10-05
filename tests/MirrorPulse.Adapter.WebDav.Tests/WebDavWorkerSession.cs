@@ -47,7 +47,7 @@ internal sealed class WebDavWorkerSession : IAsyncDisposable
     public string Root { get; }
     public string Cache { get; }
 
-    public static async Task<WebDavWorkerSession> StartAsync()
+    public static async Task<WebDavWorkerSession> StartAsync(Uri? leftEndpoint = null)
     {
         string root = Path.Combine(Path.GetTempPath(), "mp-webdav-v2-" + Guid.NewGuid().ToString("N"));
         var session = new WebDavWorkerSession(root);
@@ -59,7 +59,7 @@ internal sealed class WebDavWorkerSession : IAsyncDisposable
             Assert.AreEqual(1, hello.ProtocolVersion);
             Assert.AreEqual(2, AdapterHandshake.Negotiate(AdapterHandshake.ReadHello(hello.Payload), 3).SelectedVersion);
             AdapterRootBinding[] roots = [
-                new("left", true, new Dictionary<string, string> { ["endpoint"] = session.Left.Endpoint.AbsoluteUri, ["credentialReference"] = "left-credential", ["username"] = "user-left" }),
+                new("left", true, new Dictionary<string, string> { ["endpoint"] = (leftEndpoint ?? session.Left.Endpoint).AbsoluteUri, ["credentialReference"] = "left-credential", ["username"] = "user-left" }),
                 new("right", true, new Dictionary<string, string> { ["endpoint"] = session.Right.Endpoint.AbsoluteUri, ["credentialReference"] = "right-credential", ["authentication"] = "Bearer" }),
                 new("offline", false, new Dictionary<string, string> { ["endpoint"] = "not-an-endpoint", ["credentialReference"] = "offline-credential" })];
             await session.SendAsync("Ready", hello.RequestId, new AdapterReady(2, AdapterHandshake.V2Capabilities, roots, new Dictionary<string, string>()), response: true);

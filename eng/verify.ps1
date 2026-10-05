@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param()
 $ErrorActionPreference = "Stop"
+& (Join-Path $PSScriptRoot 'verify-adapter-version.ps1')
+& (Join-Path $PSScriptRoot 'verify-adapter-publishing.ps1')
 & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'restore-adapter-sdk.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Fixed SDK verification failed.' }
 $projects = @("src/MirrorPulse.Adapter.WebDav.Worker/MirrorPulse.Adapter.WebDav.Worker.csproj", "tests/MirrorPulse.Adapter.WebDav.Tests/MirrorPulse.Adapter.WebDav.Tests.csproj", "tools/MirrorPulse.Adapter.WebDav.Conformance/MirrorPulse.Adapter.WebDav.Conformance.csproj")
@@ -16,6 +18,6 @@ foreach ($project in $projects) {
 if ($LASTEXITCODE -ne 0) { throw 'WebDAV boundary tests failed.' }
 [xml]$trx = Get-Content -LiteralPath (@(Get-ChildItem -LiteralPath artifacts/test-results -Filter '*.trx' | Sort-Object LastWriteTimeUtc -Descending)[0].FullName) -Raw
 $counts = $trx.TestRun.ResultSummary.Counters
-if ($counts.total -ne 46 -or $counts.executed -ne 46 -or $counts.passed -ne 46 -or $counts.notExecuted -ne 0) {
+if ($counts.total -ne 47 -or $counts.executed -ne 47 -or $counts.passed -ne 47 -or $counts.notExecuted -ne 0) {
     throw 'All WebDAV URI/HTTP and real Worker process cases must execute without skips.'
 }

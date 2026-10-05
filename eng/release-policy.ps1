@@ -17,11 +17,6 @@ function Get-AdapterReleaseVersion {
 }
 
 function Resolve-AdapterReleaseVersion {
-    if ($env:MP_RELEASE_EVENT -eq 'push') {
-        $tag = $env:MP_RELEASE_REF
-        if ([string]::IsNullOrEmpty($tag) -or -not $tag.StartsWith('v', [StringComparison]::Ordinal)) { throw 'The release tag is invalid.' }
-        return Get-AdapterReleaseVersion $tag.Substring(1)
-    }
     return Get-AdapterReleaseVersion ([string]$env:MP_RELEASE_VERSION)
 }
 
