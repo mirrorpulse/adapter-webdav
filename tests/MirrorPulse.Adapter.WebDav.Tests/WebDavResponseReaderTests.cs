@@ -46,6 +46,25 @@ public sealed class WebDavResponseReaderTests
     }
 
     [TestMethod]
+    public async Task MissingHeadLengthStillAllowsAnExactBoundedEofRange()
+    {
+        using var handler = new FixtureHandler(request =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                { Content = new StreamContent(new GeneratedStream(10)), Headers = { ETag = new EntityTagHeaderValue("\"one\"") } };
+            Assert.AreEqual("bytes=8-11", request.Headers.Range?.ToString());
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
+            { Content = new ByteArrayContent(Encoding.UTF8.GetBytes("89")), Headers = { ETag = new EntityTagHeaderValue("\"one\"") } };
+            response.Content.Headers.ContentRange = new ContentRangeHeaderValue(8, 9, 10) { Unit = "Bytes" };
+            return response;
+        });
+        using var client = new HttpClient(handler);
+        CollectionAssert.AreEqual(Encoding.UTF8.GetBytes("89"), await WebDavResponseReader.ReadRangeAsync(client,
+            new Uri("https://fixture.test/file"), 8, 4, CancellationToken.None));
+    }
+
+    [TestMethod]
     public async Task HugeChunkedXmlStopsAtBudgetAndEntryLimitIsEnforced()
     {
         using var body = new GeneratedStream(long.MaxValue);

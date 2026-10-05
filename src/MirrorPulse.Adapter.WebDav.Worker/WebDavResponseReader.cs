@@ -46,14 +46,18 @@ internal static class WebDavResponseReader
             throw new InvalidDataException("The WebDAV server did not honor the requested range.");
         ValidateEncoding(response);
         ContentRangeHeaderValue? range = response.Content.Headers.ContentRange;
-        if (range is null || !range.HasRange || !range.HasLength || range.Unit != "bytes" ||
-            range.From != offset || range.To != end || range.Length <= end ||
+        if (range is null || !range.HasRange || !range.HasLength || !range.Unit.Equals("bytes", StringComparison.OrdinalIgnoreCase) ||
+            range.From != offset || range.Length <= offset ||
             (total is not null && range.Length != total))
             throw new InvalidDataException("The WebDAV Content-Range does not match the request.");
+        long responseTotal = range.Length ?? throw new InvalidDataException("The WebDAV range total is missing.");
+        long actualEnd = Math.Min(end, responseTotal - 1);
+        if (range.To != actualEnd)
+            throw new InvalidDataException("The WebDAV Content-Range end does not match the request.");
         if ((expectedTag is not null && response.Headers.ETag?.ToString() != expectedTag.ToString()) ||
             (expectedTag is null && expectedModified is not null && response.Content.Headers.LastModified != expectedModified))
             throw new WebDavRevisionConflictException(expectedTag?.ToString(), response.Headers.ETag?.ToString());
-        int expectedLength = checked((int)(end - offset + 1));
+        int expectedLength = checked((int)(actualEnd - offset + 1));
         byte[] bytes = await ReadBoundedAsync(response, expectedLength, cancellationToken).ConfigureAwait(false);
         if (bytes.Length != expectedLength)
             throw new InvalidDataException("The WebDAV range body is truncated.");
