@@ -1,9 +1,9 @@
-using System.Net.Http.Headers;
-using System.Security.Cryptography;
-using System.Text.Json;
 using System.Globalization;
 using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 using MirrorPulse.Adapter.Sdk;
 
@@ -39,7 +39,7 @@ public static class WebDavWorkerProgram
             string endpointText = config.GetValueOrDefault("endpoint")
                 ?? throw new InvalidDataException("The WebDAV endpoint is missing.");
             Uri endpoint = new(endpointText.EndsWith('/') ? endpointText : endpointText + "/");
-            using var client = new HttpClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.All });
+            using var client = WebDavHttpClientFactory.Create(endpoint);
             string? credentialReference = config.GetValueOrDefault("credentialReference");
             if (!string.IsNullOrWhiteSpace(credentialReference))
             {
@@ -172,10 +172,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         {
             string? href = responseElement.Element(dav + "href")?.Value;
             if (string.IsNullOrWhiteSpace(href)) continue;
-            Uri itemUri = Uri.TryCreate(href, UriKind.Absolute, out Uri? absolute)
-                ? absolute : new Uri(baseUri, href);
-            string relative = Uri.UnescapeDataString(baseUri.MakeRelativeUri(itemUri).ToString())
-                .Trim('/').Replace('\\', '/');
+            string relative = WebDavUriPolicy.RelativeHref(baseUri, href);
             if (relative.Length == 0 || !IsImmediateChild(relative, requestedPrefix)) continue;
             XElement? prop = responseElement.Descendants(dav + "prop").FirstOrDefault();
             bool isDirectory = prop?.Element(dav + "resourcetype")?.Element(dav + "collection") is not null;
@@ -209,7 +206,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
     private static bool IsImmediateChild(string relative, string parent)
     {
         string prefix = parent.Length == 0 ? string.Empty : parent.TrimEnd('/') + "/";
-        if (!relative.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!relative.StartsWith(prefix, StringComparison.Ordinal)) return false;
         return relative[prefix.Length..].IndexOf('/') < 0;
     }
 
@@ -227,8 +224,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTimeOffset parsed)
             ? parsed : null;
 
-    private Uri ResolveDirectory(string path) => string.IsNullOrEmpty(path)
-        ? baseUri : new Uri(Resolve(path).AbsoluteUri.TrimEnd('/') + "/");
+    private Uri ResolveDirectory(string path) => WebDavUriPolicy.Resolve(baseUri, path, directory: true);
 
     private async Task ReadRangeAsync(AdapterControlFrame command, CancellationToken cancellationToken)
     {
@@ -451,12 +447,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         return revision ?? "0";
     }
 
-    private Uri Resolve(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || path.StartsWith('/') || path.Contains('?') || path.Contains('#') ||
-            path.Replace('\\', '/').Split('/').Any(x => x is "." or "..")) throw new InvalidDataException("Unsafe path.");
-        return new Uri(baseUri, path.Replace('\\', '/') );
-    }
+    private Uri Resolve(string path) => WebDavUriPolicy.Resolve(baseUri, path);
 
     private static string? Revision(HttpResponseMessage response) =>
         response.Headers.ETag?.Tag ?? response.Content.Headers.ContentLength?.ToString(CultureInfo.InvariantCulture);
