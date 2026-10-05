@@ -1,0 +1,4 @@
+{
+  "workerProject": "src/MirrorPulse.Adapter.WebDav.Worker/MirrorPulse.Adapter.WebDav.Worker.csproj",
+  "label": "WebDAV"
+}
