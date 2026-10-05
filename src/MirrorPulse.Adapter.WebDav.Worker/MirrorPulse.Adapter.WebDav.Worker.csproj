@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\MirrorPulse.Adapter.Sdk\MirrorPulse.Adapter.Sdk.csproj" />
+    <PackageReference Include="MirrorPulse.Adapter.Sdk" />
     <InternalsVisibleTo Include="MirrorPulse.Adapter.WebDav.Tests" />
   </ItemGroup>
 </Project>

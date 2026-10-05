@@ -2,9 +2,21 @@
 
 This is the official repository for the MirrorPulse WebDAV Adapter.
 
-The repository contains the independently buildable Adapter SDK and a WebDAV protocol Worker. The Worker runs in its own process over the current-user Named Pipe protocol and supports authenticated WebDAV HEAD/GET range reads, conditional staged uploads, and transfer-cache cleanup for x64 and ARM64 packages.
+The Worker consumes the fixed, hash-verified published `MirrorPulse.Adapter.Sdk`
+0.2.1 package and runs over the current-user Named Pipe v2 protocol. Each enabled
+root has its own endpoint, HTTP client and Host credential reference. Basic and
+Bearer authentication stay scoped to that root; disabled roots do not parse their
+endpoint, request credentials or send HTTP requests.
 
-Run `pwsh ./eng/verify.ps1` to validate the SDK and Worker. Signed releases are produced by the repository workflow.
+Root-bound listing, stat, range reads, new-file uploads, stable session replay and
+upload cancellation are implemented. Streams use bounded SDK frames and temporary
+transfer leases, removed before cancellation acknowledgment. Existing-file
+replacement and other mutations are being migrated in a separate change; this
+checkpoint refuses them explicitly. Previously published v1 assets are unchanged.
+
+Run `pwsh ./eng/verify.ps1` for locked restore, Release builds, complete formatting,
+HTTP/URI boundaries and actual Worker process tests with two independently
+authenticated disposable HTTP endpoints.
 
 Requests use raw relative path segments, encoded exactly once by the Worker.
 Absolute URIs, traversal, encoded aliases and returned hrefs outside the configured

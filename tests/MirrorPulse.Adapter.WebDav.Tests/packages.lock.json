@@ -152,14 +152,17 @@
         "resolved": "13.0.3",
         "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
       },
-      "mirrorpulse.adapter.sdk": {
-        "type": "Project"
-      },
       "mirrorpulse.adapter.webdav.worker": {
         "type": "Project",
         "dependencies": {
-          "MirrorPulse.Adapter.Sdk": "[1.0.0, )"
+          "MirrorPulse.Adapter.Sdk": "[0.2.1, 0.2.1]"
         }
+      },
+      "MirrorPulse.Adapter.Sdk": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.1, 0.2.1]",
+        "resolved": "0.2.1",
+        "contentHash": "BMMtZiWynLMl+p2/zYjRJKFNaoXlHg/HqNaHqATlokcKcdYPn7hZaSm6/IOsXFrNOzBsz0D6w2ynjlNXdA5Tjw=="
       }
     }
   }
