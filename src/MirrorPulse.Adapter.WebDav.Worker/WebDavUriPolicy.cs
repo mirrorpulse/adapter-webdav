@@ -28,6 +28,12 @@ internal static class WebDavUriPolicy
     public static string RelativeHref(Uri endpoint, string href)
     {
         ValidateBase(endpoint);
+        foreach (string rawSegment in href.Split('/'))
+        {
+            string decoded = Uri.UnescapeDataString(rawSegment);
+            if (decoded is "." or ".." || decoded.Contains('/') || decoded.Contains('\\') || HasEncodedEscape(decoded))
+                throw new InvalidDataException("The WebDAV href contains a noncanonical segment.");
+        }
         if (!Uri.TryCreate(endpoint, href, out Uri? item)) throw new InvalidDataException("The WebDAV href is invalid.");
         ValidateBoundary(endpoint, item);
         string relative = item.AbsolutePath[endpoint.AbsolutePath.Length..].TrimEnd('/');
@@ -42,11 +48,18 @@ internal static class WebDavUriPolicy
         if (string.IsNullOrWhiteSpace(segment) || segment is "." or ".." ||
             segment.Any(character => char.IsControl(character) || character is ':' or '/' or '\\'))
             throw new InvalidDataException("The WebDAV path must contain canonical relative segments.");
+        if (HasEncodedEscape(segment))
+            throw new InvalidDataException("Pre-encoded WebDAV path segments are not accepted.");
+    }
+
+    private static bool HasEncodedEscape(string segment)
+    {
         for (int index = 0; index + 2 < segment.Length; index++)
         {
             if (segment[index] == '%' && Uri.IsHexDigit(segment[index + 1]) && Uri.IsHexDigit(segment[index + 2]))
-                throw new InvalidDataException("Pre-encoded WebDAV path segments are not accepted.");
+                return true;
         }
+        return false;
     }
 
     private static void ValidateBoundary(Uri endpoint, Uri item)

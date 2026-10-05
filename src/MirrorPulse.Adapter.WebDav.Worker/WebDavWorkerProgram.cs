@@ -98,8 +98,6 @@ public static class WebDavWorkerProgram
 internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, HttpClient client,
     Uri baseUri, Guid instanceId, Guid sessionId)
 {
-    private const int MaximumRangeBytes = 1024 * 1024;
-
     public async Task HandleAsync(AdapterControlFrame command, CancellationToken cancellationToken)
     {
         try
@@ -164,7 +162,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         using HttpResponseMessage response = await client.SendAsync(request,
             HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
-        XDocument document = XDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        XDocument document = await WebDavResponseReader.ReadDirectoryAsync(response, cancellationToken);
         XNamespace dav = "DAV:";
         string requestedPrefix = path.Trim('/');
         var all = new List<WebDavDirectoryEntry>();
@@ -231,14 +229,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
         string path = command.Payload.GetProperty("path").GetString() ?? throw new InvalidDataException("Path missing.");
         long offset = command.Payload.GetProperty("offset").GetInt64();
         int length = command.Payload.GetProperty("length").GetInt32();
-        if (offset < 0 || length is < 0 or > MaximumRangeBytes) throw new InvalidDataException("Range invalid.");
-        using var request = new HttpRequestMessage(HttpMethod.Get, Resolve(path));
-        request.Headers.Range = new RangeHeaderValue(offset, offset + length - 1);
-        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        byte[] bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        if (bytes.Length > length || (offset > 0 && response.StatusCode != HttpStatusCode.PartialContent))
-            throw new InvalidDataException("The WebDAV server returned an invalid range.");
+        byte[] bytes = await WebDavResponseReader.ReadRangeAsync(client, Resolve(path), offset, length, cancellationToken);
         Guid streamId = Guid.NewGuid();
         await channel.SendAsync("ReadRangeReady", command.RequestId, true, new { streamId, length = bytes.Length }, cancellationToken);
         await channel.SendChunkAsync(new AdapterBinaryChunk(command.RequestId, instanceId, sessionId,
@@ -434,7 +425,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
             HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
-        XDocument document = XDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        XDocument document = await WebDavResponseReader.ReadDirectoryAsync(response, cancellationToken);
         XNamespace dav = "DAV:";
         XElement? prop = document.Descendants(dav + "prop").FirstOrDefault();
         if (prop is null) return "0";
@@ -450,7 +441,7 @@ internal sealed class WebDavTransferProtocol(AdapterControlChannel channel, Http
     private Uri Resolve(string path) => WebDavUriPolicy.Resolve(baseUri, path);
 
     private static string? Revision(HttpResponseMessage response) =>
-        response.Headers.ETag?.Tag ?? response.Content.Headers.ContentLength?.ToString(CultureInfo.InvariantCulture);
+        response.Headers.ETag?.ToString() ?? response.Content.Headers.ContentLength?.ToString(CultureInfo.InvariantCulture);
 
     private sealed record WebDavDirectoryEntry(
         string RemoteId,
