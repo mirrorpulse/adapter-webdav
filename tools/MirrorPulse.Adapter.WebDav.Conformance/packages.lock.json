@@ -2,19 +2,6 @@
   "version": 2,
   "dependencies": {
     "net10.0-windows7.0": {
-      "MSTest": {
-        "type": "Direct",
-        "requested": "[4.0.2, )",
-        "resolved": "4.0.2",
-        "contentHash": "8kSG2Rad6oFJQvqlw8eubMNFCLsB7dNq/z5wHHWDhibz30ajGBS+td2IzCAfN/1zS+SFOOjO7Wda0VM+qUTeWA==",
-        "dependencies": {
-          "MSTest.TestAdapter": "4.0.2",
-          "MSTest.TestFramework": "4.0.2",
-          "Microsoft.NET.Test.Sdk": "18.0.1",
-          "Microsoft.Testing.Extensions.CodeCoverage": "18.1.0",
-          "Microsoft.Testing.Extensions.TrxReport": "2.0.2"
-        }
-      },
       "Microsoft.ApplicationInsights": {
         "type": "Transitive",
         "resolved": "2.23.0",
@@ -152,6 +139,13 @@
         "resolved": "13.0.3",
         "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
       },
+      "mirrorpulse.adapter.webdav.tests": {
+        "type": "Project",
+        "dependencies": {
+          "MSTest": "[4.0.2, )",
+          "MirrorPulse.Adapter.WebDav.Worker": "[1.0.0, )"
+        }
+      },
       "mirrorpulse.adapter.webdav.worker": {
         "type": "Project",
         "dependencies": {
@@ -163,6 +157,43 @@
         "requested": "[0.2.1, 0.2.1]",
         "resolved": "0.2.1",
         "contentHash": "BMMtZiWynLMl+p2/zYjRJKFNaoXlHg/HqNaHqATlokcKcdYPn7hZaSm6/IOsXFrNOzBsz0D6w2ynjlNXdA5Tjw=="
+      },
+      "MSTest": {
+        "type": "CentralTransitive",
+        "requested": "[4.0.2, )",
+        "resolved": "4.0.2",
+        "contentHash": "8kSG2Rad6oFJQvqlw8eubMNFCLsB7dNq/z5wHHWDhibz30ajGBS+td2IzCAfN/1zS+SFOOjO7Wda0VM+qUTeWA==",
+        "dependencies": {
+          "MSTest.TestAdapter": "4.0.2",
+          "MSTest.TestFramework": "4.0.2",
+          "Microsoft.NET.Test.Sdk": "18.0.1",
+          "Microsoft.Testing.Extensions.CodeCoverage": "18.1.0",
+          "Microsoft.Testing.Extensions.TrxReport": "2.0.2"
+        }
+      }
+    },
+    "net10.0-windows7.0/win-arm64": {
+      "Microsoft.Testing.Extensions.CodeCoverage": {
+        "type": "Transitive",
+        "resolved": "18.1.0",
+        "contentHash": "FJUCocHSPSjbeoGE/OojOhVUXwDng3VdNlwqzif9hMS2eFcG0f8RdjLM537aBsjP7zLHvGnWXbnUnc61v/EFCA==",
+        "dependencies": {
+          "Microsoft.DiaSymReader": "2.0.0",
+          "Microsoft.Extensions.DependencyModel": "6.0.2",
+          "Microsoft.Testing.Platform": "2.0.0"
+        }
+      }
+    },
+    "net10.0-windows7.0/win-x64": {
+      "Microsoft.Testing.Extensions.CodeCoverage": {
+        "type": "Transitive",
+        "resolved": "18.1.0",
+        "contentHash": "FJUCocHSPSjbeoGE/OojOhVUXwDng3VdNlwqzif9hMS2eFcG0f8RdjLM537aBsjP7zLHvGnWXbnUnc61v/EFCA==",
+        "dependencies": {
+          "Microsoft.DiaSymReader": "2.0.0",
+          "Microsoft.Extensions.DependencyModel": "6.0.2",
+          "Microsoft.Testing.Platform": "2.0.0"
+        }
       }
     }
   }

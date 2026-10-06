@@ -14,7 +14,7 @@ internal static class WebDavResponseReader
     internal const int MaximumDirectoryEntries = 8192;
 
     public static async Task<byte[]> ReadRangeAsync(HttpClient client, Uri uri, long offset, int length,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? expectedRevision = null)
     {
         if (offset < 0 || length is < 0 or > MaximumRangeBytes || offset > long.MaxValue - length)
             throw new InvalidDataException("The requested WebDAV range is invalid.");
@@ -24,6 +24,8 @@ internal static class WebDavResponseReader
             HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         head.EnsureSuccessStatusCode();
         ValidateEncoding(head);
+        if (expectedRevision is not null && WebDavOperations.ResponseRevision(head) != expectedRevision)
+            throw new WebDavRevisionConflictException(expectedRevision, WebDavOperations.ResponseRevision(head));
         long? total = head.Content.Headers.ContentLength;
         if (total is not null && offset >= total)
         {
