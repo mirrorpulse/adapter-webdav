@@ -45,7 +45,7 @@ try {
         [ordered]@{ schemaVersion = 1; adapterSourceSha = $SourceSha; mirrorPulseSourceSha = $productSha;
             runtime = $runtime; sdkVersion = '0.2.1'; sdkSourceSha = 'ce74cd358de148f148ce89ffc8478f6fe1920281';
             version = $metadata.version; packageSha256 = $packageRecord.sha256; packageLength = $packageRecord.length;
-            webDavConformanceCases = 14; productCases = 1; privateRuntimeVerified = $true;
+            webDavConformanceCases = 15; productCases = 1; privateRuntimeVerified = $true;
             officialTrustVerified = [bool]$metadata.publish; published = $false
         } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $results 'webdav-v2-evidence.json') -Encoding utf8
     } finally { Pop-Location }

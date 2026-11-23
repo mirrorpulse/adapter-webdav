@@ -47,7 +47,7 @@ internal sealed class WebDavWorkerSession : IAsyncDisposable
     public string Root { get; }
     public string Cache { get; }
 
-    public static async Task<WebDavWorkerSession> StartAsync(Uri? leftEndpoint = null)
+    public static async Task<WebDavWorkerSession> StartAsync(Uri? leftEndpoint = null, bool signedForm = false)
     {
         string root = Path.Combine(Path.GetTempPath(), "mp-webdav-v2-" + Guid.NewGuid().ToString("N"));
         var session = new WebDavWorkerSession(root);
@@ -62,15 +62,31 @@ internal sealed class WebDavWorkerSession : IAsyncDisposable
                 new("left", true, new Dictionary<string, string> { ["endpoint"] = (leftEndpoint ?? session.Left.Endpoint).AbsoluteUri, ["credentialReference"] = "left-credential", ["username"] = "user-left" }),
                 new("right", true, new Dictionary<string, string> { ["endpoint"] = session.Right.Endpoint.AbsoluteUri, ["credentialReference"] = "right-credential", ["authentication"] = "Bearer" }),
                 new("offline", false, new Dictionary<string, string> { ["endpoint"] = "not-an-endpoint", ["credentialReference"] = "offline-credential" })];
-            await session.SendAsync("Ready", hello.RequestId, new AdapterReady(2, AdapterHandshake.V2Capabilities, roots, new Dictionary<string, string>()), response: true);
+            if (signedForm)
+            {
+                await session.SendAsync("Ready", hello.RequestId, new
+                {
+                    selectedVersion = 2,
+                    capabilities = AdapterHandshake.V2Capabilities,
+                    roots = new[] { roots[0] },
+                    configuration = new Dictionary<string, string>(),
+                    credentialBindings = new Dictionary<string, string> { ["password"] = "form-credential" },
+                }, response: true);
+            }
+            else
+                await session.SendAsync("Ready", hello.RequestId,
+                    new AdapterReady(2, AdapterHandshake.V2Capabilities, roots, new Dictionary<string, string>()), response: true);
             session._protocol = 2;
-            foreach (string key in new[] { "left", "right" })
+            string[] expectedRoots = signedForm ? ["left"] : ["left", "right"];
+            foreach (string key in expectedRoots)
             {
                 AdapterControlFrame credential = await session.ReadAsync();
                 Assert.AreEqual("CredentialRequest", credential.MessageType);
                 Assert.AreEqual(key, credential.Payload.GetProperty("rootKey").GetString());
-                Assert.AreEqual(key + "-credential", credential.Payload.GetProperty("referenceId").GetString());
-                await session.SendAsync("CredentialResponse", credential.RequestId, new { secret = "secret-" + key }, response: true);
+                string expectedReference = signedForm ? "form-credential" : key + "-credential";
+                Assert.AreEqual(expectedReference, credential.Payload.GetProperty("referenceId").GetString());
+                await session.SendAsync("CredentialResponse", credential.RequestId,
+                    new { referenceId = expectedReference, secret = "secret-" + key }, response: true);
             }
             AdapterControlFrame connected = await session.ReadAsync();
             Assert.AreEqual("Connected", connected.MessageType);

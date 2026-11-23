@@ -26,10 +26,12 @@ public static class WebDavWorkerProgram
                 throw new InvalidDataException("InvalidReady");
             AdapterReady ready = AdapterProtocolJson.Decode<AdapterReady>(Encoding.UTF8.GetBytes(frame.Payload.GetRawText()));
             AdapterHandshake.ValidateReady(ready, offer);
+            Dictionary<string, string>? credentialBindings = frame.Payload.TryGetProperty("credentialBindings", out JsonElement bindings) &&
+                bindings.ValueKind != JsonValueKind.Null ? bindings.Deserialize<Dictionary<string, string>>() : null;
             channel.SelectProtocol(ready.SelectedVersion);
             string cache = Environment.GetEnvironmentVariable("MP_TRANSFER_CACHE_DIR")
                 ?? throw new InvalidDataException("TransferCacheRequired");
-            using var roots = await WebDavWorkerRoots.CreateAsync(ready, channel, cancellationToken).ConfigureAwait(false);
+            using var roots = await WebDavWorkerRoots.CreateAsync(ready, credentialBindings, channel, cancellationToken).ConfigureAwait(false);
             await using var protocol = new WebDavTransferProtocol(channel, arguments, roots, cache);
             await channel.SendAsync("Connected", helloId, false, new { }, cancellationToken).ConfigureAwait(false);
             await protocol.RunAsync(cancellationToken).ConfigureAwait(false);

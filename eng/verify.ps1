@@ -18,6 +18,6 @@ foreach ($project in $projects) {
 if ($LASTEXITCODE -ne 0) { throw 'WebDAV boundary tests failed.' }
 [xml]$trx = Get-Content -LiteralPath (@(Get-ChildItem -LiteralPath artifacts/test-results -Filter '*.trx' | Sort-Object LastWriteTimeUtc -Descending)[0].FullName) -Raw
 $counts = $trx.TestRun.ResultSummary.Counters
-if ($counts.total -ne 47 -or $counts.executed -ne 47 -or $counts.passed -ne 47 -or $counts.notExecuted -ne 0) {
+if ($counts.total -ne 48 -or $counts.executed -ne 48 -or $counts.passed -ne 48 -or $counts.notExecuted -ne 0) {
     throw 'All WebDAV URI/HTTP and real Worker process cases must execute without skips.'
 }

@@ -3,7 +3,7 @@
 This is the official repository for the MirrorPulse WebDAV Adapter.
 
 The Worker consumes the fixed, hash-verified published `MirrorPulse.Adapter.Sdk`
-0.2.1 package and runs over the current-user Named Pipe v2 protocol. Each enabled
+1.0.0-preview.5 package and runs over the current-user Named Pipe v2 protocol. Each enabled
 root has its own endpoint, HTTP client and Host credential reference. Basic and
 Bearer authentication stay scoped to that root; disabled roots do not parse their
 endpoint, request credentials or send HTTP requests.
@@ -96,7 +96,7 @@ The release workflow runs fourteen actual WebDAV HTTP/Worker cases on both nativ
 architectures and verifies production installation, Host-owned credentials,
 Named Pipe routing, CfSharp demand reads and conditional mutations using fixed
 MirrorPulse source `4324988f8e7f4262cc27fb399d1dc61741fcd3eb`. It records both source
-commits, the exact published SDK 0.2.1 source and the candidate package hash.
+commits, the exact published SDK 1.0.0-preview.5 source and the candidate package hash.
 Official candidates must pass the product's fixed publisher trust; exported public
 keys authorize only disposable dry-run verification. Previously published v1
 assets remain available until a reviewed stable v2 release supersedes `latest`.

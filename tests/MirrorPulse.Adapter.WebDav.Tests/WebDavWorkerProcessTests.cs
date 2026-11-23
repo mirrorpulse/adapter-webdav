@@ -13,6 +13,13 @@ namespace MirrorPulse.Adapter.WebDav.Tests;
 public sealed class WebDavWorkerProcessTests
 {
     [TestMethod]
+    public async Task ADeploymentUsesTheNamedPasswordBindingInsteadOfTheRootReference()
+    {
+        await using var session = await WebDavWorkerSession.StartAsync(signedForm: true);
+        CollectionAssert.AreEqual(Encoding.UTF8.GetBytes("left"), await session.ReadRangeAsync("left", "same.txt", 4));
+    }
+
+    [TestMethod]
     public async Task TwoEndpointsKeepCredentialsIdenticalPathsAndNewUploadsIsolated()
     {
         await using var session = await WebDavWorkerSession.StartAsync();
