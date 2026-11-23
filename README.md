@@ -1,5 +1,7 @@
 # MirrorPulse WebDAV Adapter
 
+Each deployment syncs one WebDAV folder. Enter its URL and choose anonymous access, a username and password, or a bearer token in the MirrorPulse setup form.
+
 This is the official repository for the MirrorPulse WebDAV Adapter.
 
 The Worker consumes the fixed, hash-verified published `MirrorPulse.Adapter.Sdk`
@@ -95,7 +97,7 @@ Previously released v1 packages retain their original identities and payloads.
 The release workflow runs fourteen actual WebDAV HTTP/Worker cases on both native
 architectures and verifies production installation, Host-owned credentials,
 Named Pipe routing, CfSharp demand reads and conditional mutations using fixed
-MirrorPulse source `4324988f8e7f4262cc27fb399d1dc61741fcd3eb`. It records both source
+MirrorPulse source `447e4b1cc981066f3c878287585cc3a38cac69cd`. It records both source
 commits, the exact published SDK 1.0.0-preview.5 source and the candidate package hash.
 Official candidates must pass the product's fixed publisher trust; exported public
 keys authorize only disposable dry-run verification. Previously published v1
