@@ -10,9 +10,11 @@ internal sealed class WebDavWorkerRoots : IDisposable
 {
     private readonly Dictionary<string, WebDavWorkerRoot?> _roots = new(StringComparer.Ordinal);
 
-    public static async Task<WebDavWorkerRoots> CreateAsync(AdapterReady ready, AdapterControlChannel channel, CancellationToken token)
+    public static async Task<WebDavWorkerRoots> CreateAsync(AdapterReady ready, IReadOnlyDictionary<string, string>? credentialBindings,
+        AdapterControlChannel channel, CancellationToken token)
     {
-        if (ready.Roots.Count is < 1 or > 64) throw new InvalidDataException("InvalidRoots");
+        if (ready.Roots.Count is < 1 or > 64 || (credentialBindings is not null && ready.Roots.Count != 1))
+            throw new InvalidDataException("InvalidRoots");
         var result = new WebDavWorkerRoots();
         try
         {
@@ -24,23 +26,26 @@ internal sealed class WebDavWorkerRoots : IDisposable
                 HttpClient client = WebDavHttpClientFactory.Create(endpoint);
                 client.Timeout = TimeSpan.FromSeconds(30);
                 result._roots.Add(binding.RootKey, new(binding.RootKey, endpoint, client));
-                if (binding.Configuration.GetValueOrDefault("credentialReference") is { Length: > 0 } reference)
-                {
-                    Guid request = Guid.NewGuid();
-                    await channel.SendAsync("CredentialRequest", request, false, new { rootKey = binding.RootKey, referenceId = reference }, token).ConfigureAwait(false);
-                    AdapterControlFrame response = await channel.ReadAsync(token).ConfigureAwait(false);
-                    if (response.MessageType != "CredentialResponse" || !response.IsResponse || response.RequestId != request)
-                        throw new InvalidDataException("InvalidCredentialResponse");
-                    string secret = response.Payload.GetProperty("secret").GetString() ?? throw new InvalidDataException("CredentialRequired");
-                    string kind = binding.Configuration.GetValueOrDefault("authentication") ?? "Basic";
-                    if (kind == "Bearer") client.DefaultRequestHeaders.Authorization = new("Bearer", secret);
-                    else if (kind == "Basic")
-                    {
-                        string user = binding.Configuration.GetValueOrDefault("username") ?? throw new InvalidDataException("UsernameRequired");
-                        client.DefaultRequestHeaders.Authorization = new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + secret)));
-                    }
-                    else throw new InvalidDataException("UnsupportedAuthentication");
-                }
+                string? reference = credentialBindings is null ? binding.Configuration.GetValueOrDefault("credentialReference")
+                    : credentialBindings.GetValueOrDefault("password");
+                string kind = binding.Configuration.GetValueOrDefault("authentication") ??
+                    (string.IsNullOrEmpty(reference) ? "None" : "Basic");
+                if (kind == "None" || (credentialBindings is null && string.IsNullOrEmpty(reference))) continue;
+                if (kind is not ("Basic" or "Bearer")) throw new InvalidDataException("UnsupportedAuthentication");
+                if (string.IsNullOrEmpty(reference)) throw new InvalidDataException("CredentialRequired");
+                string? user = kind == "Basic" ? binding.Configuration.GetValueOrDefault("username") : null;
+                if (kind == "Basic" && string.IsNullOrWhiteSpace(user)) throw new InvalidDataException("UsernameRequired");
+
+                Guid request = Guid.NewGuid();
+                await channel.SendAsync("CredentialRequest", request, false, new { rootKey = binding.RootKey, referenceId = reference }, token).ConfigureAwait(false);
+                AdapterControlFrame response = await channel.ReadAsync(token).ConfigureAwait(false);
+                if (response.MessageType != "CredentialResponse" || !response.IsResponse || response.RequestId != request ||
+                    (credentialBindings is not null && (!response.Payload.TryGetProperty("referenceId", out var responseReference) ||
+                        responseReference.GetString() != reference)))
+                    throw new InvalidDataException("InvalidCredentialResponse");
+                string secret = response.Payload.GetProperty("secret").GetString() ?? throw new InvalidDataException("CredentialRequired");
+                client.DefaultRequestHeaders.Authorization = kind == "Bearer" ? new("Bearer", secret)
+                    : new("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + secret)));
             }
             return result;
         }

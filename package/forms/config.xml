@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<form version="1">
+    <heading textKey="adapter.setup" />
+    <paragraph textKey="adapter.instructions" />
+    <text key="endpoint" labelKey="field.endpoint" required="true" />
+    <singleChoice key="authentication" labelKey="field.authentication" required="true" default="None">
+        <option id="None" labelKey="auth.none" />
+        <option id="Basic" labelKey="auth.basic" />
+        <option id="Bearer" labelKey="auth.bearer" />
+    </singleChoice>
+    <text key="username" labelKey="field.username" required="false" />
+    <password key="password" labelKey="field.passwordOrToken" required="false" />
+</form>
