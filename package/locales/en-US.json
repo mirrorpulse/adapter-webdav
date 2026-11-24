@@ -1,0 +1,13 @@
+{
+  "adapter.title": "WebDAV",
+  "adapter.description": "Sync files from a WebDAV server.",
+  "adapter.setup": "WebDAV connection",
+  "adapter.instructions": "Enter the WebDAV folder URL and choose the authentication used by the server.",
+  "field.endpoint": "WebDAV folder URL",
+  "field.authentication": "Authentication",
+  "auth.none": "Anonymous",
+  "auth.basic": "Username and password",
+  "auth.bearer": "Bearer token",
+  "field.username": "Username",
+  "field.passwordOrToken": "Password or token"
+}
